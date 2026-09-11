@@ -10,22 +10,19 @@ const UploadSection = () => {
   const [exportStyle, setExportStyle] = useState<SvgStyle>("outline");
 
   const handleDownloadZip = async () => {
-    const { icons, options, visualStyle, zipUrl } = processor;
-    
-    if (zipUrl) {
-      window.open(zipUrl, '_blank');
-      return;
-    }
+    const { icons, options, visualStyle } = processor;
 
     if (icons.length === 0) return;
-    
+
     const name = options.projectName.trim() || "GridXD_Export";
 
+    // Always export the assets currently present in the browser.
+    // This keeps the free/local extraction path independent from backend storage.
     await downloadAssetsZip(icons, {
       projectName: name,
-      exportStyles: ["outline"],
+      exportStyles: [exportStyle],
       visualStyle,
-      compress: true
+      compress: true,
     });
   };
 
@@ -39,7 +36,6 @@ const UploadSection = () => {
           Extrae iconos listos para producción desde mockups o genera un pack completo desde cero basándote en tu logo.
         </p>
 
-        {/* MODO SELECTOR UI — only Extract mode */}
         <div className="flex justify-center mb-10 sm:mb-16">
           <div className="bg-foreground/5 p-2 rounded-[2rem] inline-flex items-center gap-3 px-6 py-4 border border-border shadow-2xl backdrop-blur-xl">
             <Upload className="w-5 h-5 text-primary" />
@@ -50,9 +46,9 @@ const UploadSection = () => {
           </div>
         </div>
 
-        <ExtractMode 
-          processor={processor} 
-          exportStyle={exportStyle} 
+        <ExtractMode
+          processor={processor}
+          exportStyle={exportStyle}
           setExportStyle={setExportStyle}
           onUpgrade={() => {}}
           onDownload={handleDownloadZip}
