@@ -1,6 +1,6 @@
 import { ExtractedIcon } from "@/hooks/useImageProcessor";
 import { GeneratedIcon } from "@/hooks/useIconGenerator";
-import { applyStyleToSvg, SvgStyle, STYLE_META } from "@/lib/svgStyle";
+import { applyStyleToSvg, SvgStyle } from "@/lib/svgStyle";
 import { VisualStyle } from "@/lib/api";
 import JSZip from "jszip";
 import { toast } from "sonner";
@@ -13,223 +13,169 @@ export interface ZipExportOptions {
   compress?: boolean;
 }
 
-export async function downloadAssetsZip(
-  icons: ExtractedIcon[],
-  options: ZipExportOptions
-) {
+function safeName(value: string) {
+  return (value || "GridXD_Export")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64) || "GridXD_Export";
+}
+
+function normaliseSvg(svg: string, color = "currentColor") {
+  if (!svg) return "";
+  const styled = applyStyleToSvg(svg, "outline", color);
+  if (!styled.includes("<svg")) return svg;
+  return styled;
+}
+
+function dataUrlToBytes(dataUrl: string): Uint8Array | null {
+  if (!dataUrl?.startsWith("data:")) return null;
+  const comma = dataUrl.indexOf(",");
+  if (comma < 0) return null;
+  const meta = dataUrl.slice(0, comma);
+  const payload = dataUrl.slice(comma + 1);
   try {
-    if (icons.length === 0) {
+    if (meta.includes(";base64")) {
+      const binary = atob(payload);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    }
+    return new TextEncoder().encode(decodeURIComponent(payload));
+  } catch {
+    return null;
+  }
+}
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export async function downloadAssetsZip(icons: ExtractedIcon[], options: ZipExportOptions) {
+  try {
+    if (!icons.length) {
       toast.error("No hay iconos para exportar.");
       return;
     }
-    toast.info("Generando archivo ZIP, por favor espera...");
-    const zip = new JSZip();
-    const { projectName, exportStyles, visualStyle, compress } = options;
-    const primaryColor = visualStyle?.color_primary || "#7c3aed";
-    const timestamp = new Date().toISOString().split("T")[0].replace(/-/g, "");
 
-    // Helper: resolve an icon's image data as a Blob (supports both base64 and HTTP URLs)
-    const resolveImageBlob = async (dataUrl: string): Promise<Blob | null> => {
-      if (!dataUrl) return null;
-      if (dataUrl.startsWith("data:")) {
-        // Standard base64 data URL
-        const [header, base64] = dataUrl.split(",");
-        if (!base64) return null;
-        const mime = header.split(":")[1]?.split(";")[0] || "image/png";
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        return new Blob([bytes], { type: mime });
-      }
-      if (dataUrl.startsWith("http")) {
-        // Remote URL from Cloud Run / Supabase Storage — fetch it
-        try {
-          const res = await fetch(dataUrl);
-          if (!res.ok) return null;
-          return await res.blob();
-        } catch {
-          return null;
+    toast.info("Preparando ZIP...");
+    const zip = new JSZip();
+    const projectName = safeName(options.projectName);
+    const styles = options.exportStyles.length ? options.exportStyles : ["outline"] as SvgStyle[];
+    const primaryColor = options.visualStyle?.color_primary || "#7c3aed";
+    const exported: string[] = [];
+
+    const pngFolder = zip.folder("png");
+    const svgFolder = zip.folder("svg");
+    if (!pngFolder || !svgFolder) throw new Error("No se pudieron crear las carpetas de exportación");
+
+    for (const icon of icons) {
+      const base = safeName(icon.name.replace(/\.(png|svg)$/i, ""));
+      if (icon.dataUrl) {
+        const bytes = dataUrlToBytes(icon.dataUrl);
+        if (bytes) {
+          const pngName = `${base}.png`;
+          pngFolder.file(pngName, bytes);
+          exported.push(`png/${pngName}`);
         }
       }
-      return null;
-    };
-
-    // Create folder structure for each style
-    for (const style of exportStyles) {
-      const styleFolder = exportStyles.length > 1 ? zip.folder(style) : zip;
-      if (!styleFolder) continue;
-
-      for (const icon of icons) {
-        // PNG — only in first style folder to avoid duplication
-        if (icon.dataUrl && style === exportStyles[0]) {
-          const blob = await resolveImageBlob(icon.dataUrl);
-          if (blob) {
-            const arrayBuf = await blob.arrayBuffer();
-            styleFolder.file(icon.name, arrayBuf);
+      if (icon.svgContent) {
+        for (const style of styles) {
+          const svgName = `${base}.${style}.svg`;
+          const svg = style === "outline" ? normaliseSvg(icon.svgContent, primaryColor) : icon.svgContent;
+          if (svg) {
+            svgFolder.file(svgName, svg);
+            exported.push(`svg/${svgName}`);
           }
         }
-
-        // SVG — apply requested style transform
-        if (icon.svgContent) {
-          const styledSvg = applyStyleToSvg(icon.svgContent, style, primaryColor);
-          // Normalise the svg filename cleanly
-          const baseName = icon.name.replace(/\.(png|svg)$/, "");
-          styleFolder.file(`${baseName}.${style}.svg`, styledSvg);
-        }
       }
     }
 
-    // Add DNA manifest if we have visual style
-    if (visualStyle) {
-      const manifest = {
-        projectName,
-        timestamp,
-        dna: visualStyle,
-        styles: exportStyles,
-        iconCount: icons.length,
-      };
-      zip.file("design-dna.json", JSON.stringify(manifest, null, 2));
-    }
+    if (!exported.length) throw new Error("No se pudieron generar archivos exportables");
 
-    // README
-    const readme = `# ${projectName} - GRIDXD Assets
-    
-Generado por GRIDXD (2026)
-Fecha: ${timestamp}
-Estilos incluidos: ${exportStyles.join(", ")}
+    const manifest = {
+      product: "GridXD",
+      projectName,
+      generatedAt: new Date().toISOString(),
+      iconCount: icons.length,
+      files: exported,
+      visualStyle: options.visualStyle || null,
+      exportStyles: styles,
+    };
 
-## Design DNA
-- Estilo Base: ${visualStyle?.style || "Detected"}
-- Color Primario: ${primaryColor}
-- Mood: ${visualStyle?.mood || "Standard"}
-
----
-gridxd.io - Professional Icon Extraction & Generation`;
-
-    zip.file("README.md", readme);
+    zip.file("manifest.json", JSON.stringify(manifest, null, 2));
+    zip.file("README.md", `# ${projectName}\n\nExportación generada por GridXD.\n\n- Iconos: ${icons.length}\n- Formatos: PNG + SVG\n- Estilos SVG: ${styles.join(", ")}\n`);
 
     const content = await zip.generateAsync({
       type: "blob",
       compression: "DEFLATE",
-      compressionOptions: { level: compress ? 9 : 6 }
+      compressionOptions: { level: options.compress ? 9 : 6 },
     });
 
-    const url = URL.createObjectURL(content);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${projectName.toLowerCase().replace(/\s+/g, "-")}-assets.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toast.success("Descarga completada correctamente");
+    triggerDownload(content, `${projectName}-assets.zip`);
+    toast.success(`ZIP listo: ${exported.length} archivos`);
   } catch (error) {
     logger.error("Error generating ZIP: %o", error);
-    toast.error("Hubo un error al generar el archivo ZIP. Por favor, inténtalo de nuevo.");
+    toast.error(error instanceof Error ? error.message : "No se pudo generar el ZIP");
   }
 }
 
-/**
- * Download a single icon as SVG (with style applied) or PNG.
- */
 export async function downloadSingleIcon(
   data: { svgContent?: string; dataUrl?: string; name: string },
   style: SvgStyle,
-  primaryColor: string = "#7c3aed"
+  primaryColor = "#7c3aed",
 ) {
-  const baseName = data.name.replace(/\.(png|svg)$/, "");
-
-  // Prefer SVG download — cleaner for vector assets
+  const baseName = safeName(data.name.replace(/\.(png|svg)$/i, ""));
   if (data.svgContent) {
-    const styledSvg = applyStyleToSvg(data.svgContent, style, primaryColor);
-    const blob = new Blob([styledSvg], { type: "image/svg+xml" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${baseName}.${style}.svg`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const svg = applyStyleToSvg(data.svgContent, style, primaryColor);
+    triggerDownload(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }), `${baseName}.${style}.svg`);
     return;
   }
-
-  // Fallback: download PNG
   if (data.dataUrl) {
-    const a = document.createElement("a");
-    a.href = data.dataUrl;
-    a.download = `${baseName}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const bytes = dataUrlToBytes(data.dataUrl);
+    if (bytes) triggerDownload(new Blob([bytes], { type: "image/png" }), `${baseName}.png`);
   }
 }
 
 export async function downloadGeneratorPack(
   icons: GeneratedIcon[],
   visualStyle: VisualStyle,
-  options: ZipExportOptions
+  options: ZipExportOptions,
 ) {
   try {
-    toast.info("Generando archivo ZIP del sistema, por favor espera...");
+    if (!icons.length) {
+      toast.error("No hay iconos para exportar.");
+      return;
+    }
     const zip = new JSZip();
-    const { projectName, exportStyles, compress } = options;
-    const primaryColor = visualStyle.color_primary;
+    const projectName = safeName(options.projectName);
+    const styles = options.exportStyles.length ? options.exportStyles : ["outline"] as SvgStyle[];
+    const folder = zip.folder("icons");
+    if (!folder) throw new Error("No se pudo crear la carpeta de iconos");
 
-    for (const style of exportStyles) {
-      const styleFolder = zip.folder(`icons/${style}`);
+    for (const style of styles) {
+      const styleFolder = folder.folder(style);
       if (!styleFolder) continue;
-
-      icons.forEach(icon => {
-        if (icon.svgContent) {
-          const styledSvg = applyStyleToSvg(icon.svgContent, style, primaryColor);
-          styleFolder.file(icon.name, styledSvg);
-        }
-      });
+      for (const icon of icons) {
+        if (!icon.svgContent) continue;
+        styleFolder.file(icon.name.endsWith(".svg") ? icon.name : `${icon.name}.svg`, applyStyleToSvg(icon.svgContent, style, visualStyle.color_primary));
+      }
     }
 
-    // Manifest
-    const manifest = {
-      projectName,
-      version: "1.0.0",
-      dna: visualStyle,
-      styles: exportStyles,
-      icons: icons.map(i => i.name)
-    };
-    zip.file("style-dna.json", JSON.stringify(manifest, null, 2));
-
-    // README
-    const readme = `# ${projectName} — GridXD Icon System
-
-Generado por GridXD "The System Generator".
-Estilos exportados: ${exportStyles.join(", ")}
-
-## Design DNA
-- Color Primario: ${primaryColor}
-- Stroke: ${visualStyle.stroke_width}px
-- Mood: ${visualStyle.mood}
-
-gridxd.io — Design Intelligence`;
-
-    zip.file("README.md", readme);
-
-    const content = await zip.generateAsync({
-      type: "blob",
-      compression: "DEFLATE",
-      compressionOptions: { level: compress ? 9 : 6 }
-    });
-
-    const url = URL.createObjectURL(content);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${projectName.toLowerCase().replace(/\s+/g, "-")}-system-pack.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toast.success("Descarga del sistema completada correctamente");
+    zip.file("style-dna.json", JSON.stringify({ projectName, dna: visualStyle, styles, icons: icons.map((i) => i.name) }, null, 2));
+    const content = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: options.compress ? 9 : 6 } });
+    triggerDownload(content, `${projectName}-system-pack.zip`);
+    toast.success("Descarga del sistema completada");
   } catch (error) {
-    logger.error("Error generating ZIP: %o", error);
-    toast.error("Hubo un error al generar el archivo ZIP. Por favor, inténtalo de nuevo.");
+    logger.error("Error generating generator pack: %o", error);
+    toast.error("No se pudo generar el pack");
   }
 }
