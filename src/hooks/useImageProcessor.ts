@@ -9,7 +9,6 @@ import {
 import { logger } from "@/lib/logger";
 import { useAuth } from "@/contexts/AuthContext";
 import type { WorkerRegion } from "@/workers/regionDetector.worker";
-
 import ImageTracer from "imagetracerjs";
 
 export type ProcessingState =
@@ -65,50 +64,52 @@ function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function revokeObjectUrl(url: string | null) {
+  if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+}
+
 async function detectRegionsViaWorker(imgEl: HTMLImageElement): Promise<Region[]> {
+  const width = imgEl.naturalWidth || imgEl.width;
+  const height = imgEl.naturalHeight || imgEl.height;
+  if (!width || !height) throw new Error("No se han podido leer las dimensiones de la imagen.");
+
   const canvas = document.createElement("canvas");
-  canvas.width = imgEl.naturalWidth || imgEl.width;
-  canvas.height = imgEl.naturalHeight || imgEl.height;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return [{ id: "fallback", minX: 0, minY: 0, maxX: canvas.width, maxY: canvas.height }];
-  ctx.drawImage(imgEl, 0, 0);
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  if (!ctx) throw new Error("Canvas 2D no disponible para detectar regiones.");
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(imgEl, 0, 0, width, height);
+  const imageData = ctx.getImageData(0, 0, width, height);
 
-  const fallbackRegion: Region = {
-    id: "region-0-fallback",
-    minX: 0,
-    minY: 0,
-    maxX: canvas.width,
-    maxY: canvas.height,
-  };
-
-  const workerPromise = new Promise<Region[]>((resolve) => {
+  const workerPromise = new Promise<Region[]>((resolve, reject) => {
+    let settled = false;
     const worker = new Worker(new URL("../workers/regionDetector.worker.ts", import.meta.url), { type: "module" });
-    const finish = (regions: Region[]) => {
+    const finish = (regions: Region[], error?: string) => {
+      if (settled) return;
+      settled = true;
       worker.terminate();
-      resolve(regions.length ? regions : [fallbackRegion]);
+      if (error) reject(new Error(error));
+      else resolve(regions as Region[]);
     };
+
     worker.onmessage = (e: MessageEvent<{ regions: WorkerRegion[]; error: string | null }>) => {
-      if (e.data.error) {
-        logger.warn("Worker region detection error: %s", e.data.error);
-        finish([fallbackRegion]);
-        return;
-      }
-      finish(e.data.regions as Region[]);
+      if (e.data.error) finish([], e.data.error);
+      else finish(e.data.regions || []);
     };
-    worker.onerror = () => finish([fallbackRegion]);
-    worker.postMessage({ imageData, width: canvas.width, height: canvas.height });
+    worker.onerror = () => finish([], "El detector de regiones no pudo procesar la imagen.");
+    worker.postMessage({ imageData, width, height });
   });
 
-  const timeoutPromise = new Promise<Region[]>((resolve) => {
-    setTimeout(() => resolve([fallbackRegion]), 15000);
+  const timeoutPromise = new Promise<Region[]>((_, reject) => {
+    setTimeout(() => reject(new Error("La detección ha tardado demasiado. Puedes seleccionar las regiones manualmente.")), 15000);
   });
 
   return Promise.race([workerPromise, timeoutPromise]);
 }
 
 function regionArea(r: Region) {
-  return Math.max(0, r.maxX - r.minX) * Math.max(0, r.maxY - r.minY);
+  return Math.max(0, r.maxX - r.minX + 1) * Math.max(0, r.maxY - r.minY + 1);
 }
 
 function regionOverlap(a: Region, b: Region) {
@@ -116,32 +117,39 @@ function regionOverlap(a: Region, b: Region) {
   const y1 = Math.max(a.minY, b.minY);
   const x2 = Math.min(a.maxX, b.maxX);
   const y2 = Math.min(a.maxY, b.maxY);
-  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const inter = Math.max(0, x2 - x1 + 1) * Math.max(0, y2 - y1 + 1);
   if (!inter) return 0;
   return inter / Math.min(regionArea(a) || 1, regionArea(b) || 1);
 }
 
-function dedupeRegions(regions: Region[]): Region[] {
-  const sorted = [...regions]
-    .filter((r) => r.maxX - r.minX > 5 && r.maxY - r.minY > 5)
-    .sort((a, b) => regionArea(a) - regionArea(b));
+function clampRegion(r: Region, width: number, height: number): Region | null {
+  const minX = Math.max(0, Math.min(width - 1, Math.round(r.minX)));
+  const minY = Math.max(0, Math.min(height - 1, Math.round(r.minY)));
+  const maxX = Math.max(minX, Math.min(width - 1, Math.round(r.maxX)));
+  const maxY = Math.max(minY, Math.min(height - 1, Math.round(r.maxY)));
+  if (maxX - minX < 2 || maxY - minY < 2) return null;
+  return { id: r.id, minX, minY, maxX, maxY };
+}
+
+function dedupeRegions(regions: Region[], width?: number, height?: number): Region[] {
+  const normalized = regions
+    .map((region) => (width && height ? clampRegion(region, width, height) : region))
+    .filter((r): r is Region => Boolean(r))
+    .sort((a, b) => regionArea(b) - regionArea(a));
+
   const kept: Region[] = [];
-  for (const candidate of sorted) {
-    if (kept.some((existing) => regionOverlap(candidate, existing) > 0.6)) continue;
-    kept.push(candidate);
+  for (const candidate of normalized) {
+    const duplicate = kept.some((existing) => regionOverlap(candidate, existing) > 0.84);
+    if (!duplicate) kept.push(candidate);
   }
   return kept.sort((a, b) => (a.minY - b.minY) || (a.minX - b.minX));
 }
 
-function trimRegionAgainstLargeNeighbors(regions: Region[], width: number, height: number): Region[] {
-  const maxReasonableArea = width * height * 0.7;
-  const large = regions.filter((r) => regionArea(r) >= maxReasonableArea);
-  if (!large.length || regions.length <= 1) return regions;
-
-  // If an all-image/huge region exists together with smaller candidates,
-  // prefer the actual smaller candidates instead of exporting the whole sheet.
-  const filtered = regions.filter((r) => regionArea(r) < maxReasonableArea);
-  return filtered.length ? filtered : regions;
+function trimOversizedDetection(regions: Region[], width: number, height: number): Region[] {
+  const imageArea = Math.max(1, width * height);
+  if (regions.length <= 1) return regions;
+  const meaningful = regions.filter((region) => regionArea(region) < imageArea * 0.92);
+  return meaningful.length ? meaningful : regions;
 }
 
 export async function extractIconsFromRegions(
@@ -160,24 +168,27 @@ export async function extractIconsFromRegions(
   canvas.height = height;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) throw new Error("Canvas 2D context unavailable");
-  ctx.drawImage(imgEl, 0, 0);
+  ctx.drawImage(imgEl, 0, 0, width, height);
 
   const today = new Date().toISOString().split("T")[0].replace(/-/g, "");
   const proj = options.projectName || "Project";
-  const deduped = trimRegionAgainstLargeNeighbors(dedupeRegions(regions), width, height);
-  const regionsToProcess = maxIcons < Infinity ? deduped.slice(0, maxIcons) : deduped;
+  const normalized = dedupeRegions(regions, width, height);
+  const cleanRegions = trimOversizedDetection(normalized, width, height);
+  const regionsToProcess = maxIcons < Infinity ? cleanRegions.slice(0, maxIcons) : cleanRegions;
   const results: ExtractedIcon[] = [];
 
   for (let i = 0; i < regionsToProcess.length; i++) {
     const r = regionsToProcess[i];
-    const padding = Math.max(8, Math.round(Math.max(r.maxX - r.minX, r.maxY - r.minY) * 0.08));
-    const sx = Math.max(0, Math.floor(r.minX - padding));
-    const sy = Math.max(0, Math.floor(r.minY - padding));
-    const ex = Math.min(width, Math.ceil(r.maxX + padding));
-    const ey = Math.min(height, Math.ceil(r.maxY + padding));
-    const sw = Math.max(1, ex - sx);
-    const sh = Math.max(1, ey - sy);
-    if (sw < 2 || sh < 2) continue;
+    const rw = r.maxX - r.minX + 1;
+    const rh = r.maxY - r.minY + 1;
+    const padding = Math.max(6, Math.round(Math.max(rw, rh) * 0.06));
+    const sx = Math.max(0, r.minX - padding);
+    const sy = Math.max(0, r.minY - padding);
+    const ex = Math.min(width - 1, r.maxX + padding);
+    const ey = Math.min(height - 1, r.maxY + padding);
+    const sw = ex - sx + 1;
+    const sh = ey - sy + 1;
+    if (sw < 3 || sh < 3) continue;
 
     const resolution = options.upscale ? 2048 : 1024;
     const tempCanvas = document.createElement("canvas");
@@ -185,32 +196,27 @@ export async function extractIconsFromRegions(
     tempCanvas.height = sh;
     const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true });
     if (!tempCtx) throw new Error("Canvas 2D context unavailable for temp");
+    tempCtx.clearRect(0, 0, sw, sh);
     tempCtx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
 
     if (options.removeBackground) {
       const cropData = tempCtx.getImageData(0, 0, sw, sh);
       const pixels = cropData.data;
-      const corners = [[0, 0], [sw - 1, 0], [0, sh - 1], [sw - 1, sh - 1]];
-      const colorFreq: Record<string, number> = {};
-      for (const [cx, cy] of corners) {
-        const cp = (cy * sw + cx) * 4;
-        const key = `${pixels[cp]},${pixels[cp + 1]},${pixels[cp + 2]}`;
-        colorFreq[key] = (colorFreq[key] || 0) + 1;
-      }
-      let dominantColor = "255,255,255";
-      let maxF = 0;
-      for (const key in colorFreq) {
-        if (colorFreq[key] > maxF) {
-          maxF = colorFreq[key];
-          dominantColor = key;
-        }
-      }
-      const [bgR, bgG, bgB] = dominantColor.split(",").map(Number);
-      const luminance = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
-      if (luminance > 220 || luminance < 35) {
+      const corners = [[0, 0], [sw - 1, 0], [0, sh - 1], [sw - 1, sh - 1]] as const;
+      const samples = corners.map(([cx, cy]) => {
+        const p = (cy * sw + cx) * 4;
+        return [pixels[p], pixels[p + 1], pixels[p + 2]] as const;
+      });
+      const bgR = Math.round(samples.reduce((sum, c) => sum + c[0], 0) / samples.length);
+      const bgG = Math.round(samples.reduce((sum, c) => sum + c[1], 0) / samples.length);
+      const bgB = Math.round(samples.reduce((sum, c) => sum + c[2], 0) / samples.length);
+      const bgLum = 0.2126 * bgR + 0.7152 * bgG + 0.0722 * bgB;
+
+      // Only remove pixels close to a clearly dominant light/dark background.
+      if (bgLum > 220 || bgLum < 35) {
         for (let p = 0; p < pixels.length; p += 4) {
           const dist = Math.abs(pixels[p] - bgR) + Math.abs(pixels[p + 1] - bgG) + Math.abs(pixels[p + 2] - bgB);
-          if (dist < 45) pixels[p + 3] = 0;
+          if (dist <= 42) pixels[p + 3] = 0;
         }
         tempCtx.putImageData(cropData, 0, 0);
       }
@@ -221,6 +227,7 @@ export async function extractIconsFromRegions(
     outCanvas.height = resolution;
     const outCtx = outCanvas.getContext("2d");
     if (!outCtx) throw new Error("Canvas 2D context unavailable for output");
+    outCtx.clearRect(0, 0, resolution, resolution);
     const scale = Math.min((resolution * 0.9) / sw, (resolution * 0.9) / sh);
     const dw = sw * scale;
     const dh = sh * scale;
@@ -229,11 +236,10 @@ export async function extractIconsFromRegions(
     outCtx.drawImage(tempCanvas, 0, 0, sw, sh, dx, dy, dw, dh);
 
     const imageData = tempCtx.getImageData(0, 0, sw, sh);
-    const tracer = (self as Record<string, unknown>).ImageTracer || ImageTracer;
-    if (!tracer || typeof (tracer as { imagedataToSVG?: unknown }).imagedataToSVG !== "function") {
-      throw new Error("SVG vectorizer unavailable");
-    }
-    const svgString = (tracer as { imagedataToSVG: (data: ImageData, opts: Record<string, unknown>) => string }).imagedataToSVG(imageData, {
+    const tracer = (ImageTracer as unknown as { imagedataToSVG?: (data: ImageData, opts: Record<string, unknown>) => string });
+    if (typeof tracer?.imagedataToSVG !== "function") throw new Error("SVG vectorizer unavailable");
+
+    const svgString = tracer.imagedataToSVG(imageData, {
       ltres: 0.1,
       qtres: 1,
       pathomit: 8,
@@ -247,7 +253,7 @@ export async function extractIconsFromRegions(
       id,
       dataUrl: outCanvas.toDataURL("image/png"),
       svgContent: svgString,
-      name: `GRIDXD_${proj}_${id.toString().padStart(2, "0")}_${options.upscale ? "2K" : "HD"}_${today}.png`,
+      name: getIconName(id, proj, options.upscale ? "2K" : "HD", today),
     });
   }
 
@@ -262,11 +268,13 @@ export function useImageProcessor() {
   const [usedBackend, setUsedBackend] = useState(false);
   const [detectedRegions, setDetectedRegions] = useState<Region[]>([]);
   const [pendingImgEl, setPendingImgEl] = useState<HTMLImageElement | null>(null);
+  const [pendingObjectUrl, setPendingObjectUrl] = useState<string | null>(null);
   const [pendingOptions, setPendingOptions] = useState<ProcessingOptions | null>(null);
   const [visualStyle, setVisualStyle] = useState<VisualStyle>(DEFAULT_VISUAL_STYLE);
   const [removeBackground, setRemoveBackground] = useState(true);
   const [upscale, setUpscale] = useState(true);
   const [projectName, setProjectName] = useState("");
+  const detectionTimeoutRef = useRef<number | null>(null);
   const { plan: authPlan } = useAuth();
 
   const updateIconNames = useCallback(() => {
@@ -278,24 +286,26 @@ export function useImageProcessor() {
 
   const confirmRegions = useCallback(async (editedRegions: Region[]) => {
     if (!pendingImgEl || !pendingOptions) return;
-    const valid = dedupeRegions(editedRegions);
+    const width = pendingImgEl.naturalWidth || pendingImgEl.width;
+    const height = pendingImgEl.naturalHeight || pendingImgEl.height;
+    const valid = dedupeRegions(editedRegions, width, height);
     if (!valid.length) {
       setError("Mantén al menos una región para continuar.");
       return;
     }
+
     try {
       if (pendingOptions.removeBackground) {
         setState("removing-bg");
-        await delay(250);
+        await delay(150);
       }
       setState("vectorizing");
-      await delay(150);
+      await delay(100);
       setState("generating");
       const maxIcons = authPlan === "free" ? 3 : Infinity;
       const extracted = await extractIconsFromRegions(pendingImgEl, valid, pendingOptions, maxIcons);
       setIcons(extracted);
       setState("done");
-      // Usage accounting must never block the result.
       void incrementUsage().catch((err) => logger.warn("Usage increment skipped: %o", err));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -307,22 +317,53 @@ export function useImageProcessor() {
 
   const processClientSide = useCallback(async (file: File, options: ProcessingOptions) => {
     setState("uploading");
-    await delay(200);
+    setError(null);
+    await delay(120);
     setState("detecting");
-    const stylePromise = extractStyleFromBackend(file);
-    const imgEl = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = URL.createObjectURL(file);
+
+    const stylePromise = extractStyleFromBackend(file).catch((err) => {
+      logger.warn("Style extraction fallback: %o", err);
+      return DEFAULT_VISUAL_STYLE;
     });
-    const regions = await detectRegionsViaWorker(imgEl);
-    const style = await stylePromise;
-    setVisualStyle(style);
-    setPendingImgEl(imgEl);
-    setPendingOptions(options);
-    setDetectedRegions(regions);
-    setState("editing");
+
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const imgEl = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("No se ha podido cargar la imagen."));
+        img.src = objectUrl;
+      });
+
+      if (detectionTimeoutRef.current) window.clearTimeout(detectionTimeoutRef.current);
+      const regions = await detectRegionsViaWorker(imgEl);
+      const width = imgEl.naturalWidth || imgEl.width;
+      const height = imgEl.naturalHeight || imgEl.height;
+      const clean = trimOversizedDetection(dedupeRegions(regions, width, height), width, height);
+      const style = await stylePromise;
+      setVisualStyle(style);
+      setPendingImgEl(imgEl);
+      setPendingObjectUrl(objectUrl);
+      setPendingOptions(options);
+      setDetectedRegions(clean);
+      setState("editing");
+    } catch (err) {
+      revokeObjectUrl(objectUrl);
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("Detection error: %s", msg);
+      setError(msg);
+      setDetectedRegions([]);
+      setState("editing");
+      // Keep the manual editor available even when automatic detection fails.
+      setPendingImgEl(await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = objectUrl;
+      }).catch(() => null));
+      setPendingObjectUrl(objectUrl);
+      setPendingOptions(options);
+    }
   }, []);
 
   const processImages = useCallback(async (files: File[]) => {
@@ -346,102 +387,42 @@ export function useImageProcessor() {
 
     if (validFiles.length === 1) {
       const file = validFiles[0];
-      const url = URL.createObjectURL(file);
-      setPreview(url);
-      await processClientSide(file, {
+      const options: ProcessingOptions = {
         removeBackground,
         upscale,
-        projectName: projectName || undefined,
-      });
+        projectName: projectName.trim() || file.name.replace(/\.[^.]+$/, ""),
+      };
+      await processClientSide(file, options);
       return;
     }
 
-    setState("uploading");
-    const maxIcons = authPlan === "free" ? 3 : Infinity;
-    const allExtracted: ExtractedIcon[] = [];
-    for (let i = 0; i < validFiles.length; i++) {
-      const file = validFiles[i];
-      try {
-        const imgEl = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => resolve(img);
-          img.onerror = reject;
-          img.src = URL.createObjectURL(file);
-        });
-        const regions = await detectRegionsViaWorker(imgEl);
-        const extracted = await extractIconsFromRegions(imgEl, regions, {
-          removeBackground,
-          upscale,
-          projectName: `${projectName || "Batch"}_${i + 1}`,
-        }, maxIcons);
-        allExtracted.push(...extracted.map((icon) => ({
-          ...icon,
-          id: allExtracted.length + 1,
-        })));
-        setIcons([...allExtracted]);
-        setPreview(URL.createObjectURL(file));
-      } catch (err) {
-        logger.warn("Batch extraction skipped: %o", err);
-      }
-    }
-    setState(allExtracted.length ? "done" : "idle");
-    if (allExtracted.length) void incrementUsage().catch(() => undefined);
-  }, [removeBackground, upscale, projectName, processClientSide, authPlan]);
-
-  const reset = () => {
-    if (preview?.startsWith("blob:")) URL.revokeObjectURL(preview);
-    setState("idle");
-    setPreview(null);
-    setIcons([]);
-    setError(null);
-    setUsedBackend(false);
-    setDetectedRegions([]);
-    setPendingImgEl(null);
-    setPendingOptions(null);
-    setVisualStyle(DEFAULT_VISUAL_STYLE);
-  };
-
-  const injectGeneratedIcon = useCallback((svgContent: string, conceptName: string) => {
-    const today = new Date().toISOString().split("T")[0].replace(/-/g, "");
-    const resLabel = upscale ? "2K" : "HD";
-    setIcons((prev) => {
-      const newId = prev.length + 1;
-      return [...prev, {
-        id: newId,
-        dataUrl: "",
-        svgContent,
-        name: `GRIDXD_GEN_${sanitizeProjectName(conceptName).toUpperCase()}_${newId.toString().padStart(2, "0")}_${resLabel}_${today}.svg`,
-      }];
-    });
-  }, [upscale]);
-
-  const renameIcon = useCallback((id: number, newName: string) => {
-    const clean = sanitizeProjectName(newName).replace(/\.(png|svg)$/i, "");
-    setIcons((prev) => prev.map((icon) => icon.id === id ? { ...icon, name: `${clean}.png` } : icon));
-  }, []);
+    setError("La extracción actual procesa una imagen cada vez para mantener la selección de regiones precisa.");
+  }, [processClientSide, projectName, removeBackground, upscale]);
 
   return {
     state,
+    setState,
     preview,
+    setPreview,
     icons,
+    setIcons,
     error,
+    setError,
     usedBackend,
-    visualStyle,
-    processImages,
-    reset,
-    injectGeneratedIcon,
-    renameIcon,
     detectedRegions,
-    confirmRegions,
+    setDetectedRegions,
     pendingImgEl,
-    options: {
-      removeBackground,
-      setRemoveBackground,
-      upscale,
-      setUpscale,
-      projectName,
-      setProjectName,
-      updateIconNames,
-    },
+    pendingOptions,
+    visualStyle,
+    removeBackground,
+    setRemoveBackground,
+    upscale,
+    setUpscale,
+    projectName,
+    setProjectName,
+    processImages,
+    processClientSide,
+    confirmRegions,
+    updateIconNames,
   };
 }
