@@ -1,47 +1,51 @@
 # ⚡ GridXD — AI Icon System Generator
 
-> SaaS platform for extracting, generating and exporting coherent icon systems from visual references using AI.
+> SaaS product for extracting, generating and exporting coherent icon systems from visual references with AI-assisted image processing.
 
-**Status:** 🟡 Active Development  |  **Version:** 2.0.0  |  **Stack:** React · Vite · TypeScript · FastAPI
+**Status:** 🟡 Active Development  ·  **Version:** 2.0.0  ·  **Stack:** React · Vite · TypeScript · FastAPI  
+**Developer ecosystem:** RulloLabs
 
 ---
 
-## 📌 What is GridXD?
+## 👋 About
 
-GridXD is a product-design tool focused on turning mockups and visual references into reusable icon assets and structured SVG output.
+**GridXD** is a product-design tool built around a simple idea: reduce repetitive work when turning an existing visual language into a reusable icon system.
 
-It combines a modern web dashboard with an image-processing backend and AI-assisted visual analysis.
+The project combines a modern web dashboard, image-processing services and AI-assisted visual analysis into a structured SaaS workflow.
 
-## 🎯 Problem it addresses
+## ✨ Highlights
 
-Creating a consistent icon set from an existing visual language often requires repetitive manual work. GridXD explores an automated workflow for analysing a reference, extracting visual characteristics and generating or exporting reusable assets.
+- 🧩 Extract and structure icon assets from visual references
+- 🤖 AI-assisted visual/style analysis
+- 🖼️ Image-processing pipeline
+- ✏️ SVG-oriented output workflow
+- 📦 Asset packaging and export
+- ☁️ Storage, authentication and subscription integration points
+- ⚡ Modern React/Vite product interface
 
-## 🛠️ What I built
+## 🧠 What this project demonstrates
 
-- Product and interface design for the GridXD workflow.
-- React/Vite dashboard architecture.
-- Image-processing pipeline integration.
-- AI-assisted style extraction and SVG generation.
-- Asset packaging and export workflows.
-- Integration points for authentication, storage and subscriptions.
+**Product Design → UX/UI → AI Workflow → Image Processing → SaaS Architecture**
 
-## 💻 Tech Stack
+GridXD is one of the strongest examples in the RulloLabs portfolio of connecting interface design with a real technical pipeline.
 
-### Frontend
+## 🛠️ Tech Stack
+
+**Frontend**
 - React 18
 - Vite
 - TypeScript
 - Tailwind CSS
 - Lucide React
 
-### Backend
+**Backend / Processing**
 - Python
 - FastAPI
 - OpenCV
 - rembg
 - ImageTracer
 
-### AI & Services
+**AI & Infrastructure**
 - Gemini-based visual analysis
 - Supabase / PostgreSQL
 - Supabase Storage
@@ -67,7 +71,7 @@ SVG / Asset Output
 Storage / Export
 ```
 
-## 📁 Project Structure
+## 📁 Structure
 
 ```text
 gridxd/
@@ -78,7 +82,7 @@ gridxd/
 └── .github/          # Automation / deployment workflows
 ```
 
-## 🚀 Run Locally
+## 🚀 Run locally
 
 ```bash
 git clone https://github.com/RulloLabs/gridxd.git
@@ -96,21 +100,20 @@ npm run typecheck
 npm run test
 ```
 
-## 🖼️ Visualisation & Demo
+## 🔗 Links
 
-The visual presentation of GridXD is part of the RulloLabs digital-product portfolio.
+**LinkedIn:** https://www.linkedin.com/in/jordisanchez-design  
+**GitHub organisation:** https://github.com/RulloLabs
 
-🌐 **https://jorgesanchez.studio**
+> Live demos and screenshots should only be linked when they match the current production state.
 
-> Screenshots and live demo links should be kept aligned with the current production state.
+## 📊 Status
 
-## 📊 Project Status
+**Active Development** — the repository contains the frontend application and documented service architecture for the GridXD workflow.
 
-**Active Development** — the repository currently contains the frontend application and documented service architecture.
+## 💼 Professional value
 
-## 💼 Professional Value
-
-GridXD demonstrates the connection between:
+GridXD demonstrates experience across:
 
 - Product design
 - UX/UI
@@ -129,7 +132,7 @@ GridXD demonstrates the connection between:
 
 ## 🔐 Security
 
-Do not commit API keys or secrets. Use environment variables for Supabase, Stripe, AI and deployment credentials.
+Never commit API keys or secrets. Use environment variables for Supabase, Stripe, AI and deployment credentials.
 
 ## ©️ RulloLabs
 
