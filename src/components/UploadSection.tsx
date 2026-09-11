@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { WandSparkles, Upload, Download, ScanSearch } from "lucide-react";
 import { useImageProcessor } from "@/hooks/useImageProcessor";
-import { useIconGenerator } from "@/hooks/useIconGenerator";
 import { SvgStyle } from "@/lib/svgStyle";
 import { ExtractMode } from "./Upload/ExtractMode";
 import { GenerateMode } from "./Upload/GenerateMode";
@@ -9,7 +8,6 @@ import { downloadAssetsZip } from "@/lib/zip-utils";
 
 const UploadSection = () => {
   const processor = useImageProcessor();
-  const generator = useIconGenerator();
   const [mode, setMode] = useState<"extract" | "generate">("extract");
   const [exportStyle, setExportStyle] = useState<SvgStyle>("outline");
   const [projectName, setProjectName] = useState("");
