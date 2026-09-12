@@ -212,7 +212,6 @@ export async function extractIconsFromRegions(
       const bgB = Math.round(samples.reduce((sum, c) => sum + c[2], 0) / samples.length);
       const bgLum = 0.2126 * bgR + 0.7152 * bgG + 0.0722 * bgB;
 
-      // Only remove pixels close to a clearly dominant light/dark background.
       if (bgLum > 220 || bgLum < 35) {
         for (let p = 0; p < pixels.length; p += 4) {
           const dist = Math.abs(pixels[p] - bgR) + Math.abs(pixels[p + 1] - bgG) + Math.abs(pixels[p + 2] - bgB);
@@ -348,13 +347,11 @@ export function useImageProcessor() {
       setDetectedRegions(clean);
       setState("editing");
     } catch (err) {
-      revokeObjectUrl(objectUrl);
       const msg = err instanceof Error ? err.message : String(err);
       logger.error("Detection error: %s", msg);
       setError(msg);
       setDetectedRegions([]);
       setState("editing");
-      // Keep the manual editor available even when automatic detection fails.
       setPendingImgEl(await new Promise<HTMLImageElement>((resolve, reject) => {
         const img = new Image();
         img.onload = () => resolve(img);
@@ -399,6 +396,19 @@ export function useImageProcessor() {
     setError("La extracción actual procesa una imagen cada vez para mantener la selección de regiones precisa.");
   }, [processClientSide, projectName, removeBackground, upscale]);
 
+  const options: ProcessingOptions & {
+    setProjectName: (name: string) => void;
+    setRemoveBackground: (value: boolean) => void;
+    setUpscale: (value: boolean) => void;
+  } = {
+    removeBackground,
+    upscale,
+    projectName,
+    setProjectName,
+    setRemoveBackground,
+    setUpscale,
+  };
+
   return {
     state,
     setState,
@@ -420,6 +430,7 @@ export function useImageProcessor() {
     setUpscale,
     projectName,
     setProjectName,
+    options,
     processImages,
     processClientSide,
     confirmRegions,
