@@ -30,6 +30,21 @@ export const VisualStyleSchema = z.object({
 
 export type VisualStyle = z.infer<typeof VisualStyleSchema>;
 
+export const DEFAULT_VISUAL_STYLE: VisualStyle = {
+  style: "outline",
+  stroke_width: 2,
+  corner_radius: "rounded",
+  color_primary: "#000000",
+  color_secondary: "#555555",
+  color_accent: "#0066FF",
+  color_bg: "#FFFFFF",
+  mood: "minimal",
+  complexity: "simple",
+  grid_size: 24,
+  visual_weight: "regular",
+  notes: "Clean minimal outline style, suitable for SaaS dashboards.",
+};
+
 const BackendImageSchema = z.object({ url: z.string(), name: z.string() });
 const ProcessedResultSchema = z.object({
   zipUrl: z.string(),
