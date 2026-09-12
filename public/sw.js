@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gridxd-v4';
+const CACHE_NAME = 'gridxd-v5';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -10,62 +10,63 @@ const PRECACHE_ASSETS = [
   '/manifest.json'
 ];
 
-// Install: Pre-cache the shell resources
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_ASSETS);
-    })
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_ASSETS))
   );
 });
 
-// Activate: Clean up old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
+    caches.keys()
+      .then((cacheNames) => Promise.all(
         cacheNames
           .filter((name) => name !== CACHE_NAME)
           .map((name) => caches.delete(name))
-      );
-    }).then(() => self.clients.claim())
+      ))
+      .then(() => self.clients.claim())
   );
 });
 
-// Fetch: Serve from cache or network, dynamically cache new resources
 self.addEventListener('fetch', (event) => {
-  // Only handle GET requests
   if (event.request.method !== 'GET') return;
 
   const url = new URL(event.request.url);
 
-  // Avoid caching Supabase auth or API calls
-  if (url.pathname.startsWith('/v1/') || url.pathname.includes('/functions/') || url.hostname.includes('supabase.co') || url.pathname.includes('/auth/')) {
+  if (
+    url.pathname.startsWith('/v1/') ||
+    url.pathname.includes('/functions/') ||
+    url.hostname.includes('supabase.co') ||
+    url.pathname.includes('/auth/') ||
+    url.hostname.includes('stripe.com') ||
+    url.hostname.includes('a.run.app')
+  ) {
     return;
   }
 
-  // Avoid caching foreign API calls/webhooks
-  if (url.hostname.includes('stripe.com') || url.hostname.includes('a.run.app')) {
-    return;
-  }
-
-  // Strategy: Stale-While-Revalidate for same-origin assets
   if (url.origin === self.location.origin) {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) => {
+        // Never serve a stale application shell after a deployment.
+        if (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/sw.js') {
+          return fetch(event.request).then((networkResponse) => {
+            if (networkResponse.ok) cache.put(event.request, networkResponse.clone());
+            return networkResponse;
+          });
+        }
+
         return cache.match(event.request).then((cachedResponse) => {
           const fetchedResponse = fetch(event.request).then((networkResponse) => {
-            // Only cache valid successful GET responses
             if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
               cache.put(event.request, networkResponse.clone());
             }
             return networkResponse;
           }).catch((err) => {
             console.warn('[SW] Network fetch failed:', err);
+            return cachedResponse;
           });
 
-          // Return cached response immediately if exists, or fall back to network fetch
           return cachedResponse || fetchedResponse;
         });
       })
