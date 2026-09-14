@@ -16,7 +16,7 @@ const UploadSection = () => {
     const { icons, options, visualStyle } = processor;
     if (icons.length === 0) return;
 
-    const name = options.projectName.trim() || projectName.trim() || "GridXD_Export";
+    const name = options?.projectName?.trim() || projectName.trim() || "GridXD_Export";
     await downloadAssetsZip(icons, {
       projectName: name,
       exportStyles: [exportStyle],
