@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { Upload, X, Loader2, Download, Sparkles, Maximize2, Pencil } from "lucide-react";
-import { SvgStyle, STYLE_META } from "@/lib/svgStyle";
+import { SvgStyle } from "@/lib/svgStyle";
 import { useAuth } from "@/contexts/AuthContext";
 import IconEditor from "@/components/IconEditor";
 import { StyleCard } from "@/components/StyleCard";
@@ -29,6 +29,13 @@ export const ExtractMode = ({ processor, exportStyle, setExportStyle, onUpgrade,
   const [editingNameId, setEditingNameId] = useState<number | null>(null);
   const [editNameValue, setEditNameValue] = useState("");
   const primaryColor = visualStyle?.color_primary || "#7c3aed";
+
+  const projectValue = options?.projectName ?? "";
+  const removeBg = options?.removeBackground ?? true;
+  const upscaleValue = options?.upscale ?? true;
+  const setProjectNameSafe = options?.setProjectName ?? (() => undefined);
+  const setRemoveBackgroundSafe = options?.setRemoveBackground ?? (() => undefined);
+  const setUpscaleSafe = options?.setUpscale ?? (() => undefined);
 
   if (state === "editing" && pendingImgEl) {
     return <IconEditor imgEl={pendingImgEl} initialRegions={detectedRegions} onConfirm={confirmRegions} onCancel={reset} />;
@@ -93,7 +100,7 @@ export const ExtractMode = ({ processor, exportStyle, setExportStyle, onUpgrade,
             <div className="glass-card rounded-2xl border border-primary/20 p-4 sm:p-5">
               <p className="text-[10px] uppercase tracking-[0.25em] font-black text-muted-foreground">Exportación</p>
               <div className="mt-3 flex items-center justify-between text-sm"><span>Formato</span><strong>PNG + SVG</strong></div>
-              <div className="mt-2 flex items-center justify-between text-sm"><span>Resolución</span><strong>{options.upscale ? '2K' : 'HD'}</strong></div>
+              <div className="mt-2 flex items-center justify-between text-sm"><span>Resolución</span><strong>{upscaleValue ? '2K' : 'HD'}</strong></div>
               <button onClick={onDownload} disabled={!icons.length} className="mt-4 w-full premium-button premium-button-primary py-3 flex items-center justify-center gap-2 disabled:opacity-40"><Download className="w-4 h-4" /> Exportar ZIP</button>
             </div>
           </aside>
@@ -108,8 +115,8 @@ export const ExtractMode = ({ processor, exportStyle, setExportStyle, onUpgrade,
       <div className="mb-16 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 relative">
         <div className="absolute -inset-4 bg-gradient-to-br from-primary/5 via-transparent to-secondary/5 blur-3xl opacity-50 -z-10" />
         <div className="lg:col-span-4 flex flex-col gap-6 glass-card p-6 sm:p-8 rounded-[2rem] border-white/20 shadow-2xl">
-          <div className="space-y-3"><div className="flex items-center gap-2"><div className="w-1.5 h-6 bg-primary rounded-full" /><label htmlFor="project-name-input" className="text-[10px] uppercase tracking-[0.3em] font-black text-muted-foreground">Proyecto</label></div><input id="project-name-input" type="text" placeholder="Ej: Dashboard_Icons" value={options.projectName} onChange={(e) => options.setProjectName(e.target.value)} className="w-full bg-white/5 border border-white/10 p-4 rounded-2xl focus:ring-2 focus:ring-primary outline-none font-black text-foreground" /><p className="text-[10px] text-muted-foreground">Opcional: se genera un nombre seguro automáticamente.</p></div>
-          <div className="space-y-4"><div className="flex items-center gap-2"><div className="w-1.5 h-6 bg-primary rounded-full opacity-50" /><p className="text-[10px] uppercase tracking-[0.3em] font-black text-muted-foreground">Procesado</p></div><div className="grid grid-cols-2 gap-3"><button onClick={() => options.setRemoveBackground(!options.removeBackground)} className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border transition-all ${options.removeBackground ? 'bg-primary/20 border-primary text-primary' : 'bg-white/5 border-white/10 text-muted-foreground'}`}><Sparkles className="w-5 h-5" /><span className="text-[9px] font-black uppercase tracking-widest">Sin fondo</span></button><button onClick={() => options.setUpscale(!options.upscale)} className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border transition-all ${options.upscale ? 'bg-primary/20 border-primary text-primary' : 'bg-white/5 border-white/10 text-muted-foreground'}`}><Maximize2 className="w-5 h-5" /><span className="text-[9px] font-black uppercase tracking-widest">Ultra 2K</span></button></div></div>
+          <div className="space-y-3"><div className="flex items-center gap-2"><div className="w-1.5 h-6 bg-primary rounded-full" /><label htmlFor="project-name-input" className="text-[10px] uppercase tracking-[0.3em] font-black text-muted-foreground">Proyecto</label></div><input id="project-name-input" type="text" placeholder="Ej: Dashboard_Icons" value={projectValue} onChange={(e) => setProjectNameSafe(e.target.value)} className="w-full bg-white/5 border border-white/10 p-4 rounded-2xl focus:ring-2 focus:ring-primary outline-none font-black text-foreground" /><p className="text-[10px] text-muted-foreground">Opcional: se genera un nombre seguro automáticamente.</p></div>
+          <div className="space-y-4"><div className="flex items-center gap-2"><div className="w-1.5 h-6 bg-primary rounded-full opacity-50" /><p className="text-[10px] uppercase tracking-[0.3em] font-black text-muted-foreground">Procesado</p></div><div className="grid grid-cols-2 gap-3"><button onClick={() => setRemoveBackgroundSafe(!removeBg)} className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border transition-all ${removeBg ? 'bg-primary/20 border-primary text-primary' : 'bg-white/5 border-white/10 text-muted-foreground'}`}><Sparkles className="w-5 h-5" /><span className="text-[9px] font-black uppercase tracking-widest">Sin fondo</span></button><button onClick={() => setUpscaleSafe(!upscaleValue)} className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border transition-all ${upscaleValue ? 'bg-primary/20 border-primary text-primary' : 'bg-white/5 border-white/10 text-muted-foreground'}`}><Maximize2 className="w-5 h-5" /><span className="text-[9px] font-black uppercase tracking-widest">Ultra 2K</span></button></div></div>
         </div>
         <div className="lg:col-span-8 flex items-center justify-center glass-card p-8 rounded-[2rem] border-white/20 shadow-2xl min-h-[280px]"><div className="text-center max-w-md"><div className="mx-auto w-16 h-16 rounded-2xl border border-primary/20 bg-primary/10 flex items-center justify-center mb-4"><Upload className="w-7 h-7 text-primary" /></div><h3 className="text-xl font-black">Sube una imagen</h3><p className="text-sm text-muted-foreground mt-2">JPG o PNG · hasta 10 MB · una o varias imágenes</p><button onClick={() => inputRef.current?.click()} className="mt-5 premium-button premium-button-primary px-6 py-3">Seleccionar imagen</button></div></div>
       </div>
